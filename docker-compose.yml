@@ -1,0 +1,68 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-menu_sd}
+      POSTGRES_USER: ${DB_USER:-menu_sd}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Configura DB_PASSWORD en .env}
+    volumes:
+      - menu_sd_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-menu_sd} -d ${DB_NAME:-menu_sd}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  setup:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment: &api-env
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-menu_sd}
+      DB_USER: ${DB_USER:-menu_sd}
+      DB_PASSWORD: ${DB_PASSWORD:?Configura DB_PASSWORD en .env}
+      MENU_JWT_SECRET: ${MENU_JWT_SECRET:?Configura MENU_JWT_SECRET en .env}
+    command: ["node", "server/menu/setup.js", "--seed"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    environment:
+      <<: *api-env
+      MENU_HOST: 0.0.0.0
+      MENU_PORT: 3001
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        VITE_BASE_PATH: ${VITE_BASE_PATH:-/}
+        VITE_API_URL: ${VITE_API_URL:-/api}
+        VITE_GASTROBAR_MENU_URL: ${VITE_GASTROBAR_MENU_URL:-https://gastro.sierradorada.co}
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  menu_sd_postgres:
